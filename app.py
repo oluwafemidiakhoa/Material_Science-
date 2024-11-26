@@ -1,124 +1,80 @@
 import streamlit as st
-from dotenv import load_dotenv
-import os
+import pandas as pd
+from data_parsing import parse_composition, optimize_materials
+from visualization import plot_material_composition
 from openai import OpenAI
-import matplotlib.pyplot as plt
+import os
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Retrieve OpenAI API key
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    st.error("OpenAI API key not found. Please add it to your `.env` file.")
+# API Key
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    st.error("Missing OpenAI API key. Please check your .env configuration.")
     st.stop()
 
 # Initialize OpenAI client
-client = OpenAI(api_key=openai_api_key)
+client = OpenAI(api_key=api_key)
 
-# Streamlit app configuration
-st.set_page_config(
-    page_title="AI Material Formula Generator",
-    page_icon="🧪",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Function to generate material formula using OpenAI
-@st.cache_data(show_spinner=False)
-def generate_material_formula(properties):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a material scientist specializing in advanced material formulas and sustainability."},
-                {"role": "user", "content": f"Propose a material formula with the following properties: {properties}"}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"An error occurred: {e}"
-
-# Function to generate a pie chart for material composition
-def create_material_pie_chart(components, percentages):
-    try:
-        fig, ax = plt.subplots(figsize=(6, 6))
-        ax.pie(
-            percentages,
-            labels=components,
-            autopct="%1.1f%%",
-            startangle=140,
-            colors=["lightblue", "orange", "green", "pink", "purple"]
-        )
-        ax.set_title("Material Composition Breakdown", fontsize=14)
-        return fig
-    except Exception as e:
-        st.warning(f"Error generating pie chart: {e}")
-        return None
-
-# Streamlit UI
+# Streamlit App Layout
 st.title("🧪 AI-Powered Material Formula Generator")
-st.markdown(
-    """
-    This tool leverages AI to accelerate material discovery and innovation.
-    Use it to explore material formulas tailored to specific properties and applications.
-    """
-)
+st.write("Objective: Use AI and material science principles to generate optimized material formulas based on key properties like tensile strength, thermal expansion, and electrical resistivity.")
 
-# Sidebar for user input
-with st.sidebar:
-    st.header("Select Desired Properties")
-    tensile_strength = st.selectbox("Tensile Strength", ["High", "Medium", "Low"])
-    thermal_expansion = st.selectbox("Thermal Expansion", ["Low", "Medium", "High"])
-    electrical_resistivity = st.selectbox("Electrical Resistivity", ["Low", "Medium", "High"])
-    sustainability_focus = st.checkbox("Consider sustainability metrics")
-    properties = (
-        f"Tensile strength: {tensile_strength}, "
-        f"Thermal expansion: {thermal_expansion}, "
-        f"Electrical resistivity: {electrical_resistivity}. "
-        f"Focus on sustainability: {sustainability_focus}."
-    )
+# User Inputs
+st.sidebar.header("Material Properties and Comparisons")
+tensile_strength = st.sidebar.selectbox("Tensile Strength", ["Low", "Medium", "High"])
+thermal_expansion = st.sidebar.selectbox("Thermal Expansion", ["Low", "Medium", "High"])
+electrical_resistivity = st.sidebar.selectbox("Electrical Resistivity", ["Low", "Medium", "High"])
+sustainability = st.sidebar.checkbox("Consider Sustainability Metrics", value=False)
 
-st.markdown(f"### Selected Properties:\n{properties}")
+# Weight Adjustments
+st.sidebar.subheader("Weight Adjustments")
+weights = {
+    "Tensile Strength": st.sidebar.slider("Tensile Strength Weight", 0.0, 1.0, 0.5),
+    "Thermal Expansion": st.sidebar.slider("Thermal Expansion Weight", 0.0, 1.0, 0.5),
+    "Electrical Resistivity": st.sidebar.slider("Electrical Resistivity Weight", 0.0, 1.0, 0.5),
+}
 
-# Generate button
-if st.button("Generate Material Formula"):
-    with st.spinner("Generating material formula..."):
-        result = generate_material_formula(properties)
-        if result:
-            st.success("Material formula generated successfully!")
-            st.markdown("### Proposed Material Formula")
-            st.write(result)
+# Generate Formula Button
+if st.sidebar.button("Generate Formula"):
+    with st.spinner("Processing your request..."):
+        try:
+            # Material Optimization
+            optimized_materials = optimize_materials(weights)
+            components, percentages = parse_composition(optimized_materials)
 
-            # Dynamically set components and percentages (example based on standard output format)
-            components = ["Carbon Fiber", "Epoxy Resin", "Copper Nanoparticles"]
-            percentages = [70, 20, 10]  # Adjust based on extracted output or assumed defaults
+            # Generate Material Explanation using OpenAI
+            material_prompt = f"""
+            Generate a detailed explanation for a material composition with the following components:
+            {', '.join(components)} with respective percentages: {', '.join(map(str, percentages))}.
+            The material should meet the criteria of {tensile_strength} tensile strength, 
+            {thermal_expansion} thermal expansion, and {electrical_resistivity} electrical resistivity.
+            """
+            explanation_response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": material_prompt}]
+            )
+            explanation = explanation_response.choices[0].message.content
 
-            # Automatically create and display pie chart
-            st.markdown("### Material Composition Diagram")
-            pie_chart = create_material_pie_chart(components, percentages)
-            if pie_chart:
-                st.pyplot(pie_chart)
+            # Display Results
+            st.subheader("Proposed Material Formula")
+            st.dataframe(pd.DataFrame({"Component": components, "Percentage (%)": percentages}))
+            st.download_button(
+                label="Download Formula as CSV",
+                data=pd.DataFrame({"Component": components, "Percentage (%)": percentages}).to_csv(index=False),
+                file_name="optimized_materials.csv",
+                mime="text/csv",
+            )
 
-            # Save the result
-            save_option = st.checkbox("Save result to file")
-            if save_option:
-                try:
-                    filename = "material_formula.txt"
-                    with open(filename, "w", encoding="utf-8") as file:
-                        file.write(f"Desired Properties:\n{properties}\n\n")
-                        file.write(f"Proposed Material Formula:\n{result}\n")
-                    st.success(f"Result saved successfully to `{filename}`.")
-                except Exception as e:
-                    st.error(f"Failed to save the result: {e}")
+            # Display Material Explanation
+            st.subheader("Material Explanation")
+            st.write(explanation)
 
-# Footer
-st.markdown("---")
-st.markdown(
-    """
-    **Developed by Oluwafemi Idiakhoa**  
-    A step forward in combining AI and materials science for sustainable innovation.
-    """
-)
+            # Plot Composition
+            st.subheader("Material Composition Diagram")
+            plot_material_composition(components, percentages)
+
+        except Exception as e:
+            st.error(f"Error generating material formula: {e}")
